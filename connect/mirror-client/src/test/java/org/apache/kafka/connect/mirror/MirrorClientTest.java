@@ -27,6 +27,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class MirrorClientTest {
@@ -206,6 +207,90 @@ public class MirrorClientTest {
             .formatRemoteTopic("backup", "heartbeats"));
         assertEquals("backup", client.replicationPolicy()
             .topicSource("backup.heartbeats"));
+    }
+
+    @Test
+    public void testConstructorWithMap() {
+        Map<String, Object> props = Map.of("bootstrap.servers", "localhost:9092");
+        
+        try (MirrorClient client = new MirrorClient(props)) {
+            assertNotNull(client);
+            assertNotNull(client.replicationPolicy());
+        }
+    }
+
+    @Test
+    public void testConstructorWithConfig() {
+        Map<String, Object> props = Map.of("bootstrap.servers", "localhost:9092");
+        MirrorClientConfig config = new MirrorClientConfig(props);
+        
+        try (MirrorClient client = new MirrorClient(config)) {
+            assertNotNull(client);
+            assertNotNull(client.replicationPolicy());
+        }
+    }
+
+    @Test
+    public void testClose() {
+        Map<String, Object> props = Map.of("bootstrap.servers", "localhost:9092");
+        
+        MirrorClient client = new MirrorClient(props);
+        client.close();
+    }
+
+    @Test
+    public void testCycleDetectionInCountHops() {
+        ReplicationPolicy cyclicPolicy = new ReplicationPolicy() {
+            @Override
+            public String formatRemoteTopic(String sourceClusterAlias, String topic) {
+                return sourceClusterAlias + ".cyclic." + topic;
+            }
+
+            @Override
+            public String topicSource(String topic) {
+                if (topic.contains("cyclic")) {
+                    return "cyclic";
+                }
+                return null;
+            }
+
+            @Override
+            public String upstreamTopic(String topic) {
+                return topic;
+            }
+        };
+        
+        MirrorClient client = new FakeMirrorClient(cyclicPolicy, List.of());
+        assertEquals(-1, client.countHopsForTopic("source1.cyclic.topic", "target"));
+    }
+
+    @Test
+    public void testAllSourcesWithCycle() {
+        ReplicationPolicy cyclicPolicy = new ReplicationPolicy() {
+            @Override
+            public String formatRemoteTopic(String sourceClusterAlias, String topic) {
+                return sourceClusterAlias + "." + topic;
+            }
+
+            @Override
+            public String topicSource(String topic) {
+                if (topic.contains(".")) {
+                    return topic.split("\\.")[0];
+                }
+                return null;
+            }
+
+            @Override
+            public String upstreamTopic(String topic) {
+                return topic;
+            }
+        };
+        
+        MirrorClient client = new FakeMirrorClient(cyclicPolicy, List.of());
+        Set<String> sources = client.allSources("source1.topic");
+        
+        assertEquals(1, sources.size());
+        assertTrue(sources.contains("source1"));
     }
 
     private ReplicationPolicy identityReplicationPolicy(String source) {
