@@ -93,4 +93,23 @@ public class ReplicationPolicyTest {
         DEFAULT_REPLICATION_POLICY.configure(config);
         assertEquals("heartbeats", DEFAULT_REPLICATION_POLICY.heartbeatsTopic());
     }
+
+    @Test
+    public void originalTopic_shouldReturnBaseTopicForMultiHop() {
+        // Default separator "."
+        DEFAULT_REPLICATION_POLICY.configure(Map.of());
+        assertEquals("topic", DEFAULT_REPLICATION_POLICY.originalTopic("s3.s2.s1.topic"));
+
+        // Custom separator "__"
+        Map<String, Object> cfg = new HashMap<>();
+        cfg.put(MirrorClientConfig.REPLICATION_POLICY_SEPARATOR, "__");
+        DEFAULT_REPLICATION_POLICY.configure(cfg);
+        assertEquals("x", DEFAULT_REPLICATION_POLICY.originalTopic("a__b__c__x"));
+    }
+
+    @Test
+    public void originalTopic_nonRemoteReturnsSelf() {
+        DEFAULT_REPLICATION_POLICY.configure(Map.of());
+        assertEquals("plain", DEFAULT_REPLICATION_POLICY.originalTopic("plain"));
+    }
 }

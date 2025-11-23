@@ -47,4 +47,13 @@ public class SourceAndTargetTest {
         FakeSourceAndTarget fakeSourceAndTarget = new FakeSourceAndTarget("source", "target");
         assertNotEquals(sourceAndTarget, fakeSourceAndTarget);
     }
+
+    @Test
+    public void gettersAndToStringAndHashCode() {
+        SourceAndTarget st = new SourceAndTarget("s", "t");
+        assertEquals("s", st.source());
+        assertEquals("t", st.target());
+        assertEquals("s->t", st.toString());
+        assertEquals(st.toString().hashCode(), st.hashCode());
+    }
 }
