@@ -213,4 +213,113 @@ public class MirrorClientTest {
         policy.configure(Map.of(IdentityReplicationPolicy.SOURCE_CLUSTER_ALIAS_CONFIG, source));
         return policy;
     }
+
+    /**
+     * ReplicationPolicy that forces a cycle for any topic to exercise cycle-detection path
+     * in MirrorClient.countHopsForTopic.
+     */
+    private static class CycleReplicationPolicy implements ReplicationPolicy {
+        @Override
+        public String formatRemoteTopic(String sourceClusterAlias, String topic) {
+            return sourceClusterAlias + "." + topic;
+        }
+
+        @Override
+        public String topicSource(String topic) {
+            return "A";
+        }
+
+        @Override
+        public String upstreamTopic(String topic) {
+            // Without cycle guard in MirrorClient, this would loop forever.
+            return topic;
+        }
+    }
+
+    @Test
+    public void countHopsForTopic_cycleDetectedReturnsMinusOne() {
+        MirrorClient client = new MirrorClient(null, new CycleReplicationPolicy(), null);
+        // Since topicSource() is always "A" and never equals "X", visited.contains("A")
+        // triggers on the second iteration leading to -1.
+        assertEquals(-1, client.countHopsForTopic("any-topic", "X"));
+    }
+
+    @Test
+    public void isRemoteTopic_internalKafkaTopicIsNotRemote() {
+        MirrorClient client = new MirrorClient(null, new CycleReplicationPolicy(), null);
+        // Internal kafka topic should never be considered remote.
+        assertFalse(client.isRemoteTopic("__consumer_offsets"));
+    }
+
+    @Test
+    public void remoteTopicsBySource_filtersByFirstAlias() throws InterruptedException {
+        MirrorClient client = new FakeMirrorClient(List.of(
+            "s1.topicA",
+            "s1.s2.topicB",
+            "s2.topicC",
+            "plainTopic"
+        ));
+        // Remote topics sourced from s1 include both directly replicated and multi-hop starting with s1
+        Set<String> fromS1 = client.remoteTopics("s1");
+        assertTrue(fromS1.contains("s1.topicA"));
+        assertTrue(fromS1.contains("s1.s2.topicB"));
+        assertFalse(fromS1.contains("s2.topicC"));
+        assertFalse(fromS1.contains("plainTopic"));
+
+        Set<String> fromS2 = client.remoteTopics("s2");
+        assertTrue(fromS2.contains("s2.topicC"));
+        assertFalse(fromS2.contains("s1.topicA"));
+    }
+
+    @Test
+    public void allSources_cycleBreaksAndReturnsUniqueSet() {
+        MirrorClient client = new MirrorClient(null, new CycleReplicationPolicy(), null);
+        // CycleReplicationPolicy always returns source "A" and the same upstream topic.
+        // allSources should add "A" once and then stop due to cycle guard.
+        Set<String> sources = client.allSources("any");
+        assertTrue(sources.contains("A"));
+        assertEquals(1, sources.size());
+    }
+
+    @Test
+    public void isRemoteTopic_variantsCovered() {
+        MirrorClient client = new FakeMirrorClient();
+        // Remote when prefixed
+        assertTrue(client.isRemoteTopic("s1.topic"));
+        // Non-remote when no prefix
+        assertFalse(client.isRemoteTopic("topic"));
+        // Internal topics are not remote
+        assertFalse(client.isRemoteTopic(".hidden"));
+        assertFalse(client.isRemoteTopic("__consumer_offsets"));
+    }
+
+    @Test
+    public void replicationHops_noHeartbeatsReturnsMinusOne() throws InterruptedException {
+        MirrorClient client = new FakeMirrorClient(List.of("topic1", "topic2"));
+        assertEquals(-1, client.replicationHops("any"));
+    }
+
+    @Test
+    public void remoteTopicsBySource_emptyWhenNoTopics() throws InterruptedException {
+        MirrorClient client = new FakeMirrorClient(List.of());
+        assertTrue(client.remoteTopics("s1").isEmpty());
+    }
+
+    @Test
+    public void constructorAndCloseWithIdentityReplicationPolicy() {
+        Map<String, Object> props = new java.util.HashMap<>();
+        props.put(org.apache.kafka.clients.CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
+        props.put(MirrorClientConfig.REPLICATION_POLICY_CLASS, IdentityReplicationPolicy.class);
+        props.put(MirrorClientConfig.REPLICATION_POLICY_SEPARATOR, "__");
+        props.put(MirrorClientConfig.INTERNAL_TOPIC_SEPARATOR_ENABLED, false);
+
+        try (MirrorClient client = new MirrorClient((Map) props)) {
+            ReplicationPolicy policy = client.replicationPolicy();
+            assertTrue(policy instanceof IdentityReplicationPolicy);
+            // Heartbeats are special-cased; separator should be applied here since we configured "__"
+            assertEquals("backup__heartbeats", policy.formatRemoteTopic("backup", "heartbeats"));
+            assertEquals("backup", policy.topicSource("backup__heartbeats"));
+            assertEquals("orders", policy.formatRemoteTopic("us", "orders"));
+        }
+    }
 }
